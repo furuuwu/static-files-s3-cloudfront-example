@@ -13,3 +13,8 @@ variable "file_path" {
   type    = string
   default = "/" # cange if you want to put it in some "folder"
 }
+
+variable "my_ip" {
+  type        = string
+  description = "My IP"
+}

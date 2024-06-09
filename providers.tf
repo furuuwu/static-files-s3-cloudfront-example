@@ -11,7 +11,12 @@ terraform {
   }
 }
 
-# Configuration options
 provider "aws" {
   region = var.my_region
+}
+
+# To work with cloudfront, apparently you *must* use the "us-east-1"
+provider "aws" {
+  alias  = "cloudfront"
+  region = "us-east-1"
 }

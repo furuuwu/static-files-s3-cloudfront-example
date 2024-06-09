@@ -76,6 +76,9 @@ resource "aws_cloudfront_origin_access_control" "oac" {
 }
 
 resource "aws_cloudfront_distribution" "s3_distribution" {
+
+  provider = aws.cloudfront # apparently, this is important
+
   origin {
     domain_name              = aws_s3_bucket.b.bucket_regional_domain_name
     origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
@@ -87,6 +90,10 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   comment             = "CDN for my bucket"
   default_root_object = "index.html" # yup you can use this to serve static websites too
 
+  # relevant for the rate limiting - associate the AWS WAFv2 web ACL with your CloudFront distribution
+  depends_on = [aws_wafv2_web_acl.web_acl]
+  # web_acl_id = aws_wafv2_web_acl.web_acl.id
+  web_acl_id = aws_wafv2_web_acl.web_acl.arn
 
   # tbh, no ideia what most of this stuff is doing but hey, i can copy-paste
   default_cache_behavior {
@@ -173,4 +180,89 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
 # get the CloudFront distribution domain name
 output "cloudfront_distribution_domain_name" {
   value = aws_cloudfront_distribution.s3_distribution.domain_name
+}
+
+
+# Rate-limit stuff, case harkers
+
+# Define an AWS WAFv2 IP set with IP addresses to exclude from rate limiting
+resource "aws_wafv2_ip_set" "excluded_ips" {
+  name        = "excluded-ips"
+  description = "IP set to exclude"
+  scope       = "CLOUDFRONT"
+  # (Required, Forces new resource) Specifies whether this is for an AWS CloudFront 
+  # distribution or for a regional application. Valid values are CLOUDFRONT or REGIONAL. 
+  # To work with CloudFront, you must also specify the region us-east-1 (N. Virginia) 
+  # on the AWS provider.
+
+  # what fr???
+  provider = aws.cloudfront
+
+  ip_address_version = "IPV4"
+  # addresses          = ["1.2.3.4/32", "5.6.7.8/32"]  # Replace these with the IP addresses to exclude
+  addresses = ["${var.my_ip}/32"] # only my IPs
+}
+
+# Create the AWS WAFv2 web ACL
+# all these visibility_config are annoying as hell
+resource "aws_wafv2_web_acl" "web_acl" {
+  name        = "MyWebACL"
+  description = "Web ACL for rate limiting"
+  scope       = "CLOUDFRONT"
+  provider    = aws.cloudfront
+
+  default_action {
+    allow {}
+  }
+
+  # Rule to exclude IPs listed in the excluded IP set
+  rule {
+    name     = "ExcludeIPsRule"
+    priority = 0 # Lower priority to ensure it's evaluated first
+
+    action {
+      allow {}
+    }
+
+    statement {
+      ip_set_reference_statement {
+        arn = aws_wafv2_ip_set.excluded_ips.arn
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = false
+      metric_name                = "friendly-rule-metric-name"
+      sampled_requests_enabled   = false
+    }
+  }
+
+  # Rule for rate limiting all other IPs
+  rule {
+    name     = "RateLimitRule"
+    priority = 1
+
+    action {
+      block {}
+    }
+
+
+    statement {
+      rate_based_statement {
+        limit              = 100 # Adjust the limit, but it has to be in the range (100 - 2000000000)...
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = false
+      metric_name                = "friendly-rule-metric-name"
+      sampled_requests_enabled   = false
+    }
+  }
+  visibility_config {
+    cloudwatch_metrics_enabled = false
+    metric_name                = "friendly-rule-metric-name"
+    sampled_requests_enabled   = false
+  }
 }
